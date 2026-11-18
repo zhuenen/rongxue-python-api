@@ -1,5 +1,6 @@
-
 fastapi
 uvicorn[standard]
 pandas
+numpy
 python-multipart
+psycopg[binary]>=3.2,<4
