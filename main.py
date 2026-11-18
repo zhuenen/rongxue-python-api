@@ -7,29 +7,47 @@ import re
 
 app = FastAPI(
     title="融学·智伴统一数据处理服务",
-    version="3.3.0",
-    description="支持学生作答数据上传、清洗、版本处理、知识点映射和学情统计"
+    version="3.4.0",
+    description="支持学生作答数据上传、清洗、版本处理、五表关联、知识指标及观察指标学情统计"
 )
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 REQUIRED_COLUMNS = [
-    "记录编号", "学生编号", "材料编号",
-    "评分状态", "得分", "满分"
+    "记录编号",
+    "学生编号",
+    "材料编号",
+    "评分状态",
+    "得分",
+    "满分"
 ]
 
 EXPECTED_COLUMNS = [
-    "记录编号", "学生编号", "材料编号",
-    "主题编号", "节点编号", "作答事件编号",
-    "修订版本", "模拟提交时间", "评分状态",
-    "得分", "满分", "学生最终作答",
-    "解答过程", "评分点得分"
+    "记录编号",
+    "学生编号",
+    "材料编号",
+    "主题编号",
+    "节点编号",
+    "作答事件编号",
+    "修订版本",
+    "模拟提交时间",
+    "评分状态",
+    "得分",
+    "满分",
+    "学生最终作答",
+    "解答过程",
+    "评分点得分"
 ]
 
 OPTIONAL_COLUMNS = [
-    "主题编号", "节点编号", "作答事件编号",
-    "修订版本", "模拟提交时间", "学生最终作答",
-    "解答过程", "评分点得分"
+    "主题编号",
+    "节点编号",
+    "作答事件编号",
+    "修订版本",
+    "模拟提交时间",
+    "学生最终作答",
+    "解答过程",
+    "评分点得分"
 ]
 
 
@@ -39,6 +57,7 @@ OPTIONAL_COLUMNS = [
 
 def read_csv_file(content):
     """兼容常见中文CSV编码"""
+
     try:
         return pd.read_csv(
             BytesIO(content),
@@ -64,6 +83,7 @@ def read_csv_file(content):
 
 def read_upload(content, filename):
     """检查文件类型和大小"""
+
     if not filename or not filename.lower().endswith(".csv"):
         raise HTTPException(
             status_code=400,
@@ -87,15 +107,18 @@ def read_upload(content, filename):
 
 async def load_optional_file(upload):
     """读取可选关联文件"""
+
     if upload is None:
         return None
 
     content = await upload.read()
+
     return read_upload(content, upload.filename)
 
 
 def require_columns(df, columns, name="数据文件"):
     """必要字段检查"""
+
     missing = [
         col for col in columns
         if col not in df.columns
@@ -113,12 +136,14 @@ def require_columns(df, columns, name="数据文件"):
 
 def clean_text_columns(df):
     """清理文本字段，不改变原始业务含义"""
+
     df = df.copy()
 
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = df[col].apply(
             lambda x: x.strip() if isinstance(x, str) else x
         )
+
         df[col] = df[col].replace("", np.nan)
 
     return df
@@ -126,6 +151,7 @@ def clean_text_columns(df):
 
 def records_to_json(df):
     """转换成可以返回给API的JSON数据"""
+
     if df is None or df.empty:
         return []
 
@@ -153,23 +179,25 @@ def records_to_json(df):
 # ==========================================
 
 def _group_key(value):
-    """统一分组键"""
+    """统一分组键，避免空值在全部事件与有效评分数据间匹配失败"""
     return "未分类" if pd.isna(value) else str(value)
 
 
 def calculate_group_stats(df, group_column, valid_df=None):
     """
-    df：全部正式作答事件
-    valid_df：有效评分记录
-    两种统计口径严格分开
+    按指定字段计算学情统计。
+
+    df：该分组的全部正式作答事件，用于计算作答事件数。
+    valid_df：全部有效评分记录，用于计算有效评分数、得分及得分率。
     """
+
     if df is None or df.empty or group_column not in df.columns:
         return []
 
     if valid_df is None:
         valid_df = df
 
-    if group_column not in valid_df.columns:
+    if valid_df is None or group_column not in valid_df.columns:
         valid_df = df.iloc[0:0].copy()
 
     valid_groups = {}
@@ -194,18 +222,12 @@ def calculate_group_stats(df, group_column, valid_df=None):
             scored_group = valid_df.iloc[0:0].copy()
 
         total_score = (
-            pd.to_numeric(
-                scored_group["得分"],
-                errors="coerce"
-            ).sum()
+            pd.to_numeric(scored_group["得分"], errors="coerce").sum()
             if "得分" in scored_group.columns else 0
         )
 
         total_full = (
-            pd.to_numeric(
-                scored_group["满分"],
-                errors="coerce"
-            ).sum()
+            pd.to_numeric(scored_group["满分"], errors="coerce").sum()
             if "满分" in scored_group.columns else 0
         )
 
@@ -224,7 +246,8 @@ def calculate_group_stats(df, group_column, valid_df=None):
 
 
 def calculate_multi_group_stats(df, columns, valid_df=None):
-    """按多个知识指标分别统计"""
+    """按多个知识指标分别统计；事件数与评分指标使用不同数据口径"""
+
     result = {}
 
     for col in columns:
@@ -244,6 +267,7 @@ def calculate_multi_group_stats(df, columns, valid_df=None):
 
 def normalize_mapping(question_df: Optional[pd.DataFrame]):
     """标准化题目与材料映射表"""
+
     if question_df is None:
         return None, "未上传题目与材料表，跳过知识指标映射"
 
@@ -285,7 +309,8 @@ def normalize_mapping(question_df: Optional[pd.DataFrame]):
 
 
 def normalize_requirements(requirements_df):
-    """建立指标编号到课程目标和观察指标的映射"""
+    """标准化课程要求表，建立指标编号到课程目标/观察指标的映射"""
+
     if requirements_df is None:
         return None, "未上传课程要求表，未补充课程标准说明"
 
@@ -325,7 +350,8 @@ def normalize_requirements(requirements_df):
 
 
 def explode_indicator_rows(df):
-    """将一个材料对应多个观察指标的记录拆分"""
+    """将一个材料对应多个观察指标的记录拆分，分别计入各指标统计"""
+
     if df is None or df.empty or "指标编号" not in df.columns:
         return df.copy() if df is not None else pd.DataFrame()
 
@@ -353,6 +379,7 @@ def explode_indicator_rows(df):
 
 def merge_mapping(answer_df, mapping_df, key):
     """将映射信息关联到作答记录"""
+
     if mapping_df is None or key not in answer_df.columns:
         return answer_df
 
@@ -380,7 +407,9 @@ def merge_mapping(answer_df, mapping_df, key):
         on=key,
         how="left"
     )
-    # ==========================================
+
+
+# ==========================================
 # 4. 核心数据分析
 # ==========================================
 
@@ -406,6 +435,7 @@ def analyze_payload(
 
     # 4.2 完全重复记录处理
     exact_duplicates = int(df.duplicated().sum())
+
     df = df.drop_duplicates().copy()
 
     # 4.3 补充可选字段
@@ -471,11 +501,9 @@ def analyze_payload(
     # 4.7 修订版本处理
     df = df.sort_values(
         ["修订版本", "模拟提交时间"],
-        ascending=[True, True],
         na_position="first"
     )
 
-    # 每个作答事件只保留最新修订版本用于正式统计
     latest = df.drop_duplicates(
         subset=["作答事件编号"],
         keep="last"
@@ -483,26 +511,23 @@ def analyze_payload(
 
     history_count = len(df) - len(latest)
 
-    # 4.8 评分状态规范化
-    df["评分状态"] = (
-        df["评分状态"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-
+    # 4.8 评分状态统计
     latest["评分状态"] = (
         latest["评分状态"]
-        .fillna("")
+        .fillna("状态缺失")
         .astype(str)
         .str.strip()
     )
 
     status_counts = (
-        latest["评分状态"].value_counts().to_dict()
+        latest["评分状态"]
+        .value_counts()
+        .to_dict()
     )
 
     # 4.9 有效评分识别
+    # 未评分、待评分、未作答均不直接按零分处理
+
     latest["有效评分"] = (
         (latest["评分状态"] == "已评分")
         & latest["得分"].notna()
@@ -522,14 +547,12 @@ def analyze_payload(
         ] = reason
 
     add_reason(
-        latest["得分"].notna()
-        & (latest["得分"] < 0),
+        latest["得分"].notna() & (latest["得分"] < 0),
         "得分为负数"
     )
 
     add_reason(
-        latest["满分"].notna()
-        & (latest["满分"] <= 0),
+        latest["满分"].notna() & (latest["满分"] <= 0),
         "满分无效"
     )
 
@@ -542,10 +565,7 @@ def analyze_payload(
 
     add_reason(
         (latest["评分状态"] == "已评分")
-        & (
-            latest["得分"].isna()
-            | latest["满分"].isna()
-        ),
+        & (latest["得分"].isna() | latest["满分"].isna()),
         "已评分但得分或满分缺失"
     )
 
@@ -578,8 +598,8 @@ def analyze_payload(
     )
 
     # 5.1 关联课程要求
-    requirements, requirements_message = (
-        normalize_requirements(requirements_df)
+    requirements, requirements_message = normalize_requirements(
+        requirements_df
     )
 
     latest = merge_mapping(
@@ -668,7 +688,8 @@ def analyze_payload(
                     class_column,
                     valid_df=valid
                 )
-                    # ======================================
+
+    # ======================================
     # 8. 学生、主题、节点、材料统计
     # ======================================
 
@@ -704,6 +725,8 @@ def analyze_payload(
         indicator_latest,
         [
             "指标编号",
+            "主题",
+            "观察指标",
             "知识点编号",
             "知识点名称"
         ],
@@ -736,9 +759,7 @@ def analyze_payload(
     )
 
     other_ungraded_count = int(
-        len(ungraded)
-        - unanswered_count
-        - pending_count
+        len(ungraded) - unanswered_count - pending_count
     )
 
     # ======================================
@@ -775,7 +796,7 @@ def analyze_payload(
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.3.0",
+        "version": "3.4.0",
         "status": "analysis_completed",
 
         "summary": {
@@ -815,7 +836,9 @@ def analyze_payload(
             latest.head(20)
         )
     }
-    # ==========================================
+
+
+# ==========================================
 # 12. API接口：系统首页
 # ==========================================
 
@@ -824,7 +847,7 @@ def home():
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.3.0",
+        "version": "3.4.0",
         "status": "running",
         "functions": [
             "CSV数据上传",
@@ -832,18 +855,19 @@ def home():
             "数据清洗",
             "完全重复记录去重",
             "作答修订版本处理",
-            "有效评分识别",
-            "学生学情统计",
-            "班级学情统计",
+            "有效评分识别（仅统计已评分且分值有效的记录；待评分、未评分、未作答不计为零分）",
+            "学生学情统计（作答事件数与有效评分数分开统计）",
+            "班级学情统计（作答事件数与有效评分数分开统计）",
             "主题学情统计",
             "节点学情统计",
             "材料学情统计",
             "知识指标映射",
             "课程要求与观察指标关联",
             "多指标材料拆分统计",
+            "按指标编号、主题和观察指标输出知识学情统计",
             "异常数据识别",
             "数据质量报告",
-            "作答事件数与有效评分数分开统计"
+            "分组统计区分全部作答事件与有效评分记录"
         ]
     }
 
@@ -858,7 +882,7 @@ def health():
     return {
         "status": "healthy",
         "message": "Python数据服务运行正常",
-        "version": "3.3.0"
+        "version": "3.4.0"
     }
 
 
