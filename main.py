@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from typing import Optional
 from io import BytesIO
@@ -6,7 +7,7 @@ import numpy as np
 
 app = FastAPI(
     title="融学·智伴统一数据处理服务",
-    version="3.1.0",
+    version="3.2.0",
     description="支持学生作答数据上传、清洗、版本处理、知识点映射和学情统计"
 )
 
@@ -22,31 +23,17 @@ REQUIRED_COLUMNS = [
 ]
 
 EXPECTED_COLUMNS = [
-    "记录编号",
-    "学生编号",
-    "材料编号",
-    "主题编号",
-    "节点编号",
-    "作答事件编号",
-    "修订版本",
-    "模拟提交时间",
-    "评分状态",
-    "得分",
-    "满分",
-    "学生最终作答",
-    "解答过程",
-    "评分点得分"
+    "记录编号", "学生编号", "材料编号",
+    "主题编号", "节点编号", "作答事件编号",
+    "修订版本", "模拟提交时间", "评分状态",
+    "得分", "满分", "学生最终作答",
+    "解答过程", "评分点得分"
 ]
 
 OPTIONAL_COLUMNS = [
-    "主题编号",
-    "节点编号",
-    "作答事件编号",
-    "修订版本",
-    "模拟提交时间",
-    "学生最终作答",
-    "解答过程",
-    "评分点得分"
+    "主题编号", "节点编号", "作答事件编号",
+    "修订版本", "模拟提交时间",
+    "学生最终作答", "解答过程", "评分点得分"
 ]
 
 
@@ -56,7 +43,6 @@ OPTIONAL_COLUMNS = [
 
 def read_csv_file(content):
     """兼容常见中文CSV编码"""
-
     try:
         return pd.read_csv(
             BytesIO(content),
@@ -172,11 +158,38 @@ def records_to_json(df):
 # 2. 统计工具
 # ==========================================
 
-def calculate_group_stats(df, group_column):
-    """按照指定字段计算学情统计"""
+def _group_key(value):
+    """统一分组键，避免空值匹配失败"""
+    return "未分类" if pd.isna(value) else str(value)
 
-    if df.empty or group_column not in df.columns:
+
+def calculate_group_stats(df, group_column, valid_df=None):
+    """
+    df：全部正式作答事件
+    valid_df：有效评分记录
+
+    作答事件数按照全部事件统计。
+    有效评分数、得分、满分和得分率
+    仅按照有效评分记录计算。
+    """
+
+    if df is None or df.empty or group_column not in df.columns:
         return []
+
+    if valid_df is None:
+        valid_df = df
+
+    if valid_df is None or group_column not in valid_df.columns:
+        valid_df = df.iloc[0:0].copy()
+
+    valid_groups = {}
+
+    if not valid_df.empty:
+        for valid_name, valid_group in valid_df.groupby(
+            group_column,
+            dropna=False
+        ):
+            valid_groups[_group_key(valid_name)] = valid_group
 
     result = []
 
@@ -185,17 +198,33 @@ def calculate_group_stats(df, group_column):
         dropna=False
     ):
 
-        total_score = group["得分"].sum()
-        total_full = group["满分"].sum()
+        key = _group_key(group_name)
+
+        scored_group = valid_groups.get(key)
+
+        if scored_group is None:
+            scored_group = valid_df.iloc[0:0].copy()
+
+        total_score = (
+            pd.to_numeric(
+                scored_group["得分"],
+                errors="coerce"
+            ).sum()
+            if "得分" in scored_group.columns else 0
+        )
+
+        total_full = (
+            pd.to_numeric(
+                scored_group["满分"],
+                errors="coerce"
+            ).sum()
+            if "满分" in scored_group.columns else 0
+        )
 
         result.append({
-            group_column: (
-                str(group_name)
-                if pd.notna(group_name)
-                else "未分类"
-            ),
+            group_column: key,
             "作答事件数": int(len(group)),
-            "有效评分数": int(len(group)),
+            "有效评分数": int(len(scored_group)),
             "得分总和": round(float(total_score), 2),
             "满分总和": round(float(total_full), 2),
             "得分率": round(
@@ -206,14 +235,18 @@ def calculate_group_stats(df, group_column):
     return result
 
 
-def calculate_multi_group_stats(df, columns):
+def calculate_multi_group_stats(df, columns, valid_df=None):
     """按照多个知识指标分别统计"""
 
     result = {}
 
     for col in columns:
         if col in df.columns:
-            result[col] = calculate_group_stats(df, col)
+            result[col] = calculate_group_stats(
+                df,
+                col,
+                valid_df=valid_df
+            )
 
     return result
 
@@ -559,8 +592,9 @@ def analyze_payload(
 
             if class_column:
                 class_stats = calculate_group_stats(
-                    valid,
-                    class_column
+                    latest,
+                    class_column,
+                    valid_df=valid
                 )
 
     # ======================================
@@ -568,33 +602,38 @@ def analyze_payload(
     # ======================================
 
     student_stats = calculate_group_stats(
-        valid,
-        "学生编号"
+        latest,
+        "学生编号",
+        valid_df=valid
     )
 
     theme_stats = calculate_group_stats(
-        valid,
-        "主题编号"
+        latest,
+        "主题编号",
+        valid_df=valid
     )
 
     node_stats = calculate_group_stats(
-        valid,
-        "节点编号"
+        latest,
+        "节点编号",
+        valid_df=valid
     )
 
     material_stats = calculate_group_stats(
-        valid,
-        "材料编号"
+        latest,
+        "材料编号",
+        valid_df=valid
     )
 
     # 知识指标统计
     knowledge_stats = calculate_multi_group_stats(
-        valid,
+        latest,
         [
             "指标编号",
             "知识点编号",
             "知识点名称"
-        ]
+        ],
+        valid_df=valid
     )
 
     # ======================================
@@ -614,6 +653,19 @@ def analyze_payload(
         latest["评分状态"] != "已评分"
     ].copy()
 
+    # 分别统计未作答、待评分及其他未评分状态
+    unanswered_count = int(
+        (latest["评分状态"] == "未作答").sum()
+    )
+
+    pending_count = int(
+        (latest["评分状态"] == "待评分").sum()
+    )
+
+    other_ungraded_count = int(
+        len(ungraded) - unanswered_count - pending_count
+    )
+
     # ======================================
     # 10. 数据质量报告
     # ======================================
@@ -627,6 +679,9 @@ def analyze_payload(
         "有效评分数": int(len(valid)),
         "无效评分数": int(len(invalid_scoring)),
         "未评分记录数": int(len(ungraded)),
+        "未作答数": unanswered_count,
+        "待评分数": pending_count,
+        "其他未评分状态数": other_ungraded_count,
         "未评分状态分布": (
             ungraded["评分状态"].value_counts().to_dict()
             if not ungraded.empty else {}
@@ -644,13 +699,16 @@ def analyze_payload(
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "status": "analysis_completed",
 
         "summary": {
             "原始记录数": int(original_count),
             "正式作答事件数": int(len(latest)),
             "有效评分数": int(len(valid)),
+            "未作答数": unanswered_count,
+            "待评分数": pending_count,
+            "异常评分数": int(len(invalid_scoring)),
             "有效得分总和": round(float(total_score), 2),
             "有效满分总和": round(float(total_full), 2),
             "整体得分率": overall_rate
@@ -692,7 +750,7 @@ def home():
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "status": "running",
         "functions": [
             "CSV数据上传",
@@ -701,14 +759,15 @@ def home():
             "完全重复记录去重",
             "作答修订版本处理",
             "有效评分识别（仅统计已评分且分值有效的记录；待评分、未评分、未作答不计为零分）",
-            "学生学情统计",
-            "班级学情统计",
+            "学生学情统计（作答事件数与有效评分数分开统计）",
+            "班级学情统计（作答事件数与有效评分数分开统计）",
             "主题学情统计",
             "节点学情统计",
             "材料学情统计",
             "知识指标映射",
             "异常数据识别",
-            "数据质量报告"
+            "数据质量报告",
+            "分组统计区分全部作答事件与有效评分记录"
         ]
     }
 
@@ -723,7 +782,7 @@ def health():
     return {
         "status": "healthy",
         "message": "Python数据服务运行正常",
-        "version": "3.1.0"
+        "version": "3.2.0"
     }
 
 
