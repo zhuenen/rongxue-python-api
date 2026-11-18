@@ -6,7 +6,7 @@ import numpy as np
 
 app = FastAPI(
     title="融学·智伴统一数据处理服务",
-    version="3.0.0",
+    version="3.1.0",
     description="支持学生作答数据上传、清洗、版本处理、知识点映射和学情统计"
 )
 
@@ -523,9 +523,10 @@ def analyze_payload(
             class_column = next(
                 (
                     col for col in [
-                        "班级",
+                        "模拟班级编号",
                         "班级编号",
-                        "班级名称"
+                        "班级名称",
+                        "班级"
                     ]
                     if col in student_df.columns
                 ),
@@ -626,6 +627,10 @@ def analyze_payload(
         "有效评分数": int(len(valid)),
         "无效评分数": int(len(invalid_scoring)),
         "未评分记录数": int(len(ungraded)),
+        "未评分状态分布": (
+            ungraded["评分状态"].value_counts().to_dict()
+            if not ungraded.empty else {}
+        ),
         "异常记录数": int(len(exceptions)),
         "评分状态分布": status_counts,
         "原始字段": original_columns,
@@ -639,7 +644,7 @@ def analyze_payload(
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "status": "analysis_completed",
 
         "summary": {
@@ -687,7 +692,7 @@ def home():
 
     return {
         "system": "融学·智伴04统一数据处理模块",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "status": "running",
         "functions": [
             "CSV数据上传",
@@ -695,7 +700,7 @@ def home():
             "数据清洗",
             "完全重复记录去重",
             "作答修订版本处理",
-            "有效评分识别",
+            "有效评分识别（仅统计已评分且分值有效的记录；待评分、未评分、未作答不计为零分）",
             "学生学情统计",
             "班级学情统计",
             "主题学情统计",
@@ -718,7 +723,7 @@ def health():
     return {
         "status": "healthy",
         "message": "Python数据服务运行正常",
-        "version": "3.0.0"
+        "version": "3.1.0"
     }
 
 
